@@ -80,9 +80,9 @@ contract PokemonNFT is ERC721, Ownable {
      * @param speed The base speed stat of the Pokémon
      */
 
-// external function can be called from outside of the contract f.e. frontend
-
 uint256 public boxPrice = 0.01 ether;
+
+// external function can be called from outside of the contract f.e. frontend
 
 function mintRandomPokemon(
     string memory name,
@@ -101,7 +101,10 @@ function mintRandomPokemon(
     _currentTokenId++;
     uint256 newTokenId = _currentTokenId;
 
-    _safeMint(msg.sender, newTokenId);
+    _safeMint(msg.sender, newTokenId);// official ERC272 minting function giving ownership of NFT to *recipient*
+
+    // This creates a new PokemonAttributes struct with the data the user gave and stores it in our mapping.
+
     _tokenIdToAttributes[newTokenId] = PokemonAttributes(
         name,
         gender,
@@ -114,8 +117,12 @@ function mintRandomPokemon(
         defense,
         speed
     );
+    
+    // Track all token IDs for frontend access
 
     _allTokenIds.push(newTokenId);
+
+    // this emits an event to the blockchain
 
     emit PokemonCardMinted(
         msg.sender,
@@ -132,7 +139,6 @@ function mintRandomPokemon(
         speed
     );
 }
-
 
  // function to withdraw money as a webpage owner
 

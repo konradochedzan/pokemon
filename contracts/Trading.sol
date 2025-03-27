@@ -17,10 +17,11 @@ contract Trading is Ownable, ReentrancyGuard {
 
     // Mapping: NFT contract -> tokenId -> listing
     mapping(address => mapping(uint256 => Listing)) public listings;
-
-    // Optional: track user’s listed tokenIds so you can retrieve them easily
-    // e.g.: mapping(address => EnumerableSet.UintSet) private _sellerToListedTokenIds;
-
+    mapping(address => EnumerableSet.UintSet) private _sellerToListedTokenIds; // track user’s listed tokenIds so you can retrieve them easily
+    
+    bool public paused;
+    uint256 public tradingFee = 0; // Optional fee (% in basis points, e.g. 500 = 5%)
+    
     // Events
     event Listed(
         address indexed nftContract,
