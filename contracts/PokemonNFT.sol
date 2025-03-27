@@ -82,46 +82,43 @@ contract PokemonNFT is ERC721, Ownable {
 
 // external function can be called from outside of the contract f.e. frontend
 
-function mintPokemonCard(
-    address recipient,
-    string memory name, // here we add *memory* to mark that we want to save it on the blockchain, string is dynamic type
+uint256 public boxPrice = 0.01 ether;
+
+function mintRandomPokemon(
+    string memory name,
     string memory gender,
     string memory pokemonType,
     string memory spAttack,
     string memory spDefense,
-    uint8 level, // here we don't have to use *memory* to save it since it's value type and it's auto saved
+    uint8 level,
     uint8 hp,
     uint16 attack,
     uint16 defense,
     uint16 speed
-) external onlyOwner {
+) external payable {
+    require(msg.value == boxPrice, "Incorrect payment");
+
     _currentTokenId++;
     uint256 newTokenId = _currentTokenId;
 
-    _safeMint(recipient, newTokenId); // official ERC272 minting function giving ownership of NFT to *recipient*
+    _safeMint(msg.sender, newTokenId);
+    _tokenIdToAttributes[newTokenId] = PokemonAttributes(
+        name,
+        gender,
+        pokemonType,
+        spAttack,
+        spDefense,
+        level,
+        hp,
+        attack,
+        defense,
+        speed
+    );
 
-    // This creates a new PokemonAttributes struct with the data the user gave and stores it in our mapping.
-
-    _tokenIdToAttributes[newTokenId] = PokemonAttributes({
-        name: name,
-        gender: gender,
-        pokemonType: pokemonType,
-        spAttack: spAttack,
-        spDefense: spDefense,
-        level: level,
-        hp: hp,
-        attack: attack,
-        defense: defense,
-        speed: speed
-    });
-
-    // Track all token IDs for frontend access
     _allTokenIds.push(newTokenId);
 
-    // this emits an event to the blockchain
-
     emit PokemonCardMinted(
-        recipient,
+        msg.sender,
         newTokenId,
         name,
         gender,
@@ -136,6 +133,12 @@ function mintPokemonCard(
     );
 }
 
+
+ // function to withdraw money as a webpage owner
+
+function withdraw() external onlyOwner {
+    payable(owner()).transfer(address(this).balance);
+}
 
     /**
     * @dev Returns the attributes of a given Pokémon card
