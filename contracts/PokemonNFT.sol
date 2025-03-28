@@ -1,14 +1,25 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.17;
 
+import "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol"; // NFT functionality like minting and transferring
 import "@openzeppelin/contracts/access/Ownable.sol"; // Gives the owner mechanics 
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
  * @title PokemonNFT
  * @dev ERC721 contract for minting Pokémon card NFTs
  */
-contract PokemonNFT is ERC721, Ownable {
+contract PokemonNFT is ERC721, Ownable, ReentrancyGuard {
+
+    address public trustedSigner;
+
+    function setTrustedSigner(address _signer) external onlyOwner {
+        trustedSigner = _signer;
+    }
+
     // A simple struct for storing on-chain card characteristics
     struct PokemonAttributes {
         string name;
@@ -21,6 +32,7 @@ contract PokemonNFT is ERC721, Ownable {
         uint16 attack;
         uint16 defense;
         uint16 speed;
+        uint8 purity; // on a scale 1-255 defines maximal potential of a given pokemon, should be assigned with a normal-ish distribution with mean 128
     }
 
     // Store attributes in a mapping from tokenId -> PokemonAttributes
@@ -35,6 +47,8 @@ contract PokemonNFT is ERC721, Ownable {
     // Base URI for metadata, if you plan to point to an off-chain JSON
     // If you want purely on-chain metadata, you can build the tokenURI directly
     string private _baseTokenURI;
+
+    uint256 public boxPrice = 0.01 ether;
 
     /**
      * @dev Emitted when a new Pokemon card is minted
@@ -54,7 +68,8 @@ contract PokemonNFT is ERC721, Ownable {
         uint8 hp,
         uint16 attack,
         uint16 defense,
-        uint16 speed
+        uint16 speed,
+        uint8 purity
     );
 
     // This is a function that sets up the contracts setting when contract is deployed
@@ -78,11 +93,11 @@ contract PokemonNFT is ERC721, Ownable {
      * @param attack The base attack stat of the Pokémon
      * @param defense The base defense stat of the Pokémon
      * @param speed The base speed stat of the Pokémon
+     * @param purity The purity of a Pokemon, potential in training and affecting other stats
      */
 
-uint256 public boxPrice = 0.01 ether;
-
-// external function can be called from outside of the contract f.e. frontend
+// external function can be called from outside of the contract f.e. frontend - this should be changed to minting only 
+// for owner (us) as clients will be able to create new cards via openMysteryBox
 
 function mintRandomPokemon(
     string memory name,
@@ -94,16 +109,13 @@ function mintRandomPokemon(
     uint8 hp,
     uint16 attack,
     uint16 defense,
-    uint16 speed
-) external payable {
-    require(msg.value == boxPrice, "Incorrect payment");
-
+    uint16 speed,
+    uint8 purity
+) external onlyOwner {
     _currentTokenId++;
     uint256 newTokenId = _currentTokenId;
 
-    _safeMint(msg.sender, newTokenId);// official ERC272 minting function giving ownership of NFT to *recipient*
-
-    // This creates a new PokemonAttributes struct with the data the user gave and stores it in our mapping.
+    _safeMint(msg.sender, newTokenId);
 
     _tokenIdToAttributes[newTokenId] = PokemonAttributes(
         name,
@@ -115,14 +127,11 @@ function mintRandomPokemon(
         hp,
         attack,
         defense,
-        speed
+        speed,
+        purity
     );
-    
-    // Track all token IDs for frontend access
 
     _allTokenIds.push(newTokenId);
-
-    // this emits an event to the blockchain
 
     emit PokemonCardMinted(
         msg.sender,
@@ -136,9 +145,103 @@ function mintRandomPokemon(
         hp,
         attack,
         defense,
-        speed
+        speed,
+        purity
     );
 }
+
+
+// open mystery box - function for users in front end to generate randomly the pokemon
+
+function openMysteryBox(
+    string memory name,
+    string memory gender,
+    string memory pokemonType,
+    string memory spAttack,
+    string memory spDefense,
+    uint8 level,
+    uint8 hp,
+    uint16 attack,
+    uint16 defense,
+    uint16 speed,
+    uint8 purity,
+    bytes calldata signature
+) external payable {
+    require(msg.value == boxPrice, "Incorrect payment");
+
+    // Prepare the message hash (must match what was signed off-chain)
+    bytes32 messageHash = keccak256(
+        abi.encodePacked(
+            msg.sender,
+            name,
+            gender,
+            pokemonType,
+            spAttack,
+            spDefense,
+            level,
+            hp,
+            attack,
+            defense,
+            speed,
+            purity
+        )
+    );
+    bytes32 ethSignedMessageHash = ECDSA.toEthSignedMessageHash(messageHash);
+
+    // Must match a trusted signer (your backend's wallet)
+
+    address signer = ECDSA.recover(ethSignedMessageHash, signature);
+    require(signer == trustedSigner, "Invalid signature");
+
+    // Mint the Pokémon
+    _currentTokenId++;
+    uint256 newTokenId = _currentTokenId;
+    _safeMint(msg.sender, newTokenId);
+
+    _tokenIdToAttributes[newTokenId] = PokemonAttributes(
+        name,
+        gender,
+        pokemonType,
+        spAttack,
+        spDefense,
+        level,
+        hp,
+        attack,
+        defense,
+        speed,
+        purity
+    );
+
+    _allTokenIds.push(newTokenId);
+
+    emit PokemonCardMinted(
+        msg.sender,
+        newTokenId,
+        name,
+        gender,
+        pokemonType,
+        spAttack,
+        spDefense,
+        level,
+        hp,
+        attack,
+        defense,
+        speed,
+        purity
+    );
+}
+
+
+
+
+// upgrade stats of your pokemon: here we would like to add a function allowing user to
+// train their pokemons. Bu paying a certain ammount the level of the pokemon increases,
+// what leads to increase of other stats like hp, attack and so on but the increase is dependent on 
+// the 'purity' of each pokemon. We would like to assign some maximal values of attack, hp and so on
+// to max purity (f.e. on a scale 1-255) and say 50% of that maximal values to those of lowest purity.
+
+
+
 
  // function to withdraw money as a webpage owner
 
