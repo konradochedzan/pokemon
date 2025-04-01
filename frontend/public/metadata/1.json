@@ -1,0 +1,15 @@
+{
+    "name": "Pikachu",
+    "description": "Electric-type Pokémon",
+    "image": "http://localhost:3001/images/pikachu.png",
+    "attributes": [
+        {
+            "trait_type": "Attack",
+            "value": 55
+        },
+        {
+            "trait_type": "Speed",
+            "value": 90
+        }
+    ]
+}
