@@ -15,6 +15,7 @@ import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
  */
 contract TradingWithAuctions is Ownable, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.UintSet;
+    
 
     /**
      * @dev The type of sale for a particular listing.
@@ -48,12 +49,11 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard {
     // For convenience: track tokenIds each seller has listed
     mapping(address => EnumerableSet.UintSet) private _sellerToListedTokenIds;
 
-    // Circuit breaker for emergency
+    mapping(address => bool) public isBlacklisted;
     bool public paused;
-
-    // Optional trading fee in basis points (e.g., 500 = 5%)
     uint256 public tradingFee = 0;
-
+    uint256 public constant MAX_PRICE = 100 ether;
+    
     // Events
     event Listed(
         address indexed nft,
@@ -100,13 +100,26 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard {
     }
 
     /**
+     * @dev Checking if the wallet wasn't blacklisted 
+     */
+    modifier notBlacklisted() {
+        require(!isBlacklisted[msg.sender], "Address is blacklisted");
+        _;
+    }
+    /**
      * @notice Pause or unpause the contract.
      * @param _paused Pass true to pause, false to unpause.
      */
     function setPaused(bool _paused) external onlyOwner {
         paused = _paused;
     }
-
+    /**
+     * @notice Blacklist malicious users
+     * @param user users account to be blacklisted
+     */
+    function setBlacklist(address user, bool value) external onlyOwner {
+        isBlacklisted[user] = value;
+    }
     /**
      * @notice Sets the platform trading fee, in basis points.
      * @param fee The new fee. For example, 500 = 5%. Max allowed is 10%.
@@ -141,8 +154,10 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard {
         external
         whenNotPaused
         nonReentrant
+        notBlacklisted
     {
         require(price > 0, "Price must be > 0");
+        require(price <= MAX_PRICE, "Listing price exceeds maximum allowed");
         require(
             IERC721(nftContract).ownerOf(tokenId) == msg.sender,
             "Not token owner"
@@ -184,6 +199,7 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard {
         payable
         whenNotPaused
         nonReentrant
+        notBlacklisted
     {
         Listing storage item = listings[nftContract][tokenId];
         require(item.saleType == SaleType.FixedPrice, "Not a fixed price sale");
@@ -219,6 +235,7 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard {
         external
         whenNotPaused
         nonReentrant
+        notBlacklisted
     {
         Listing memory item = listings[nftContract][tokenId];
         require(item.price > 0, "Not listed");
@@ -245,11 +262,13 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard {
         payable
         whenNotPaused
         nonReentrant
+        notBlacklisted
     {
         Listing storage item = listings[nftContract][tokenId];
         require(item.saleType == SaleType.Auction, "Not an auction");
         require(block.timestamp < item.endTime, "Auction ended");
         require(msg.value > item.highestBid, "Bid too low");
+        require(msg.value <= MAX_PRICE, "Bid exceeds maximum allowed");
         require(item.seller != address(0), "Not listed");
 
         // If there's an existing bidder, refund them

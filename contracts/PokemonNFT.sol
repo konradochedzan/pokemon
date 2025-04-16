@@ -7,13 +7,22 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol"; // NFT functionality l
 import "@openzeppelin/contracts/access/Ownable.sol"; // Gives the owner mechanics
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
 
 /**
  * @title PokemonNFT
  * @dev ERC721 contract for minting Pokémon card NFTs
  */
-contract PokemonNFT is ERC721, Ownable, ReentrancyGuard {
+contract PokemonNFT is ERC721, Ownable, ReentrancyGuard, Pausable {
     address public trustedSigner;
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
 
     function setTrustedSigner(address _signer) external onlyOwner {
         trustedSigner = _signer;
@@ -109,7 +118,7 @@ contract PokemonNFT is ERC721, Ownable, ReentrancyGuard {
         uint16 defense,
         uint16 speed,
         uint8 purity
-    ) external onlyOwner {
+    ) external onlyOwner nonReentrant whenNotPaused {
         _currentTokenId++;
         uint256 newTokenId = _currentTokenId;
 
@@ -149,6 +158,9 @@ contract PokemonNFT is ERC721, Ownable, ReentrancyGuard {
     }
 
     // open mystery box - function for users in front end to generate randomly the pokemon
+    // variables for the mechanism preventing bot spam and infinite loops
+    uint256 public lastMintBlock;
+    uint256 public mintsThisBlock;
 
     function openMysteryBox(
         string memory name,
@@ -163,10 +175,22 @@ contract PokemonNFT is ERC721, Ownable, ReentrancyGuard {
         uint16 speed,
         uint8 purity,
         bytes calldata signature
-    ) external payable {
+    ) external payable nonReentrant whenNotPaused {
         require(msg.value == boxPrice, "Incorrect payment");
 
+        if (block.number == lastMintBlock) {
+            mintsThisBlock++;
+        } else {
+            lastMintBlock = block.number;
+            mintsThisBlock = 1;
+        }
+
+        if (mintsThisBlock > 20) {
+            _pause();
+        }
+
         // Prepare the message hash (must match what was signed off-chain)
+        
         bytes32 messageHash = keccak256(
             abi.encodePacked(
                 msg.sender,
@@ -186,7 +210,7 @@ contract PokemonNFT is ERC721, Ownable, ReentrancyGuard {
         bytes32 ethSignedMessageHash = ECDSA.toEthSignedMessageHash(
             messageHash
         );
-
+        
         // Must match a trusted signer (your backend's wallet)
 
         address signer = ECDSA.recover(ethSignedMessageHash, signature);
@@ -238,7 +262,7 @@ contract PokemonNFT is ERC721, Ownable, ReentrancyGuard {
 
     // function to withdraw money as a webpage owner
 
-    function withdraw() external onlyOwner {
+    function withdraw() external onlyOwner nonReentrant whenNotPaused {
         payable(owner()).transfer(address(this).balance);
     }
 
@@ -265,9 +289,17 @@ contract PokemonNFT is ERC721, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Optionally set the base URI if you host JSON externally
+     * @dev At some point changing the metadata is locked so that the contract is more trustworthy
      */
+
+    bool public metadataLocked;
+
+    function lockMetadata() external onlyOwner {
+        metadataLocked = true;
+    }
+
     function setBaseURI(string memory baseURI) external onlyOwner {
+        require(!metadataLocked, "Metadata is locked");
         _baseTokenURI = baseURI;
     }
 }

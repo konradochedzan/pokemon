@@ -1,17 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { ethers, parseEther } from 'ethers';
-
+import { ethers } from 'ethers';
 
 /**
  * Replace these with the actual ABIs from your Hardhat build artifacts.
  * For example, import them from /artifacts/contracts/PokemonNFT.sol/PokemonNFT.json if you're using Hardhat.
  */
-//import PokemonNFTArtifact from "./abis/PokemonNFT.json";
+import PokemonNFTArtifact from "./abis/PokemonNFT.json";
 import TradingArtifact from "./abis/TradingWithAuctions.json";
-import { generateSignature } from "../../scripts/generateSignature.js"; // adjust path as needed
-//const PokemonNFTAbi = PokemonNFTArtifact.abi;
+
+const PokemonNFTAbi = PokemonNFTArtifact.abi;
 const TradingAbi = TradingArtifact.abi;
-import PokemonNFTAbi from "./abis/PokemonNFT.json";
 
 /**
  * Replace these with the addresses from your Hardhat deploy output.
@@ -20,7 +18,6 @@ import PokemonNFTAbi from "./abis/PokemonNFT.json";
  */
 const PokemonNFTAddress = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
 const TradingAddress = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
-
 
 export default function CompleteFrontend() {
     const [provider, setProvider] = useState(null);
@@ -63,8 +60,6 @@ export default function CompleteFrontend() {
         speed: 100,
         purity: 255,
     });
-    // 🧬 Owned NFTs
-    const [ownedTokens, setOwnedTokens] = useState([]);
 
     /**
      * 1. On component mount, try to set up ethers (if window.ethereum is present)
@@ -171,7 +166,8 @@ export default function CompleteFrontend() {
             setTradingContract(tradeContract);
 
             // Read box price from NFT contract
-            setBoxPrice("0.01");
+            const price = await nftContract.boxPrice();
+            setBoxPrice(ethers.formatEther(price));
         } catch (err) {
             console.error(err);
             setConsoleLog(`Error: ${err.message}`);
@@ -186,89 +182,20 @@ export default function CompleteFrontend() {
             setConsoleLog("Not connected.");
             return;
         }
-
         try {
-            const name = "Pikachu";
-            const gender = "Male";
-            const pokemonType = "Electric";
-            const spAttack = "Thunderbolt";
-            const spDefense = "Static Field";
-            const level = 5;
-            const hp = 35;
-            const attack = 55;
-            const defense = 40;
-            const speed = 90;
-            const purity = 255;
+            // Convert boxPrice to Wei
+            const priceWei = ethers.parseEther(boxPrice);
 
-            const signature = await generateSignature(
-                userAddress,
-                name,
-                gender,
-                pokemonType,
-                spAttack,
-                spDefense,
-                level,
-                hp,
-                attack,
-                defense,
-                speed,
-                purity
-            );
-
-            console.log({ name, gender, pokemonType, spAttack, spDefense, level, hp, attack, defense, speed, purity });
-
-            const tx = await pokemonNFTContract.openMysteryBox(
-                name,
-                gender,
-                pokemonType,
-                spAttack,
-                spDefense,
-                level,
-                hp,
-                attack,
-                defense,
-                speed,
-                purity,
-                signature,
-                {
-                    value: parseEther("0.01"),
-                }
-            );
-
+            const tx = await pokemonNFTContract.openMysteryBox({
+                value: priceWei,
+            });
             await tx.wait();
-            setConsoleLog("🎉 Mystery Box Opened!");
-            await fetchOwnedPokemon();
+            setConsoleLog("Mystery Box Opened! Check your wallet for the new NFT.");
         } catch (err) {
-            console.error("🛑 openMysteryBox error:", err);
-            setConsoleLog(err.message || "Unknown error");
+            console.error(err);
+            setConsoleLog(err.message);
         }
     };
-    const fetchOwnedPokemon = async () => {
-        console.log("📦 Contract loaded?", pokemonNFTContract);
-        console.log("🧑 User address:", userAddress);
-        if (!pokemonNFTContract || !userAddress) return;
-
-        try {
-            const balance = await pokemonNFTContract.balanceOf(userAddress);
-            const owned = [];
-
-            for (let i = 0; i < balance; i++) {
-                const tokenId = await pokemonNFTContract.tokenOfOwnerByIndex(userAddress, i);
-                const details = await pokemonNFTContract.getPokemon(tokenId);
-
-                owned.push({
-                    tokenId: tokenId.toString(),
-                    ...details,
-                });
-            }
-
-            setOwnedTokens(owned);
-        } catch (err) {
-            console.error("Error fetching owned Pokémon:", err);
-            setConsoleLog("❌ Failed to fetch owned Pokémon.");
-        }
-    };
-
 
     /**
      * 5. Admin Mint (onlyOwner)
@@ -308,29 +235,11 @@ export default function CompleteFrontend() {
             );
             await tx.wait();
             setConsoleLog("Admin minted a new Pokemon!");
-            await fetchOwnedPokemon();
         } catch (err) {
             console.error(err);
             setConsoleLog(err.message);
         }
     };
-
-    const setTrustedSigner = async () => {
-        if (!pokemonNFTContract || !signer) {
-            setConsoleLog("Not connected.");
-            return;
-        }
-
-        try {
-            const tx = await pokemonNFTContract.setTrustedSigner(await signer.getAddress());
-            await tx.wait();
-            setConsoleLog("✅ Trusted signer set to your address.");
-        } catch (err) {
-            console.error(err);
-            setConsoleLog(`Error: ${err.message}`);
-        }
-    };
-
 
     /**
      * 6. List NFT (fixed or auction)
@@ -578,12 +487,7 @@ export default function CompleteFrontend() {
                     Admin Mint
                 </button>
             </div>
-            <button
-                onClick={setTrustedSigner}
-                className="p-2 bg-red-500 text-white rounded mt-2"
-            >
-                Set Trusted Signer (Dev)
-            </button>
+
             {/* List NFT */}
             <div className="mt-4 border p-4">
                 <h2 className="font-bold">List NFT (Fixed or Auction)</h2>
@@ -697,27 +601,6 @@ export default function CompleteFrontend() {
                     Finalize
                 </button>
             </div>
-            <div className="mt-4 p-4 border">
-                <h2 className="font-bold text-xl mb-2">🎴 My Pokémon</h2>
-                {ownedTokens.length === 0 ? (
-                    <p>No Pokémon owned yet.</p>
-                ) : (
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                        {ownedTokens.map((p, i) => (
-                            <div key={i} className="p-3 border rounded bg-white shadow">
-                                <h3 className="font-bold">{p.name} (#{p.tokenId})</h3>
-                                <p>Type: {p.pokemonType}</p>
-                                <p>Level: {p.level.toString()}</p>
-                                <p>HP: {p.hp.toString()}</p>
-                                <p>ATK: {p.attack.toString()} | DEF: {p.defense.toString()} | SPD: {p.speed.toString()}</p>
-                                <p>SP ATK: {p.spAttack} | SP DEF: {p.spDefense}</p>
-                                <p>Purity: {p.purity.toString()}</p>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
-
 
             {/* Console Output */}
             <div className="mt-4 p-4 bg-gray-100">
