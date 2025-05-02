@@ -8,13 +8,26 @@ import "@openzeppelin/contracts/access/Ownable.sol"; // Gives the owner mechanic
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
+import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
 /**
  * @title PokemonNFT
  * @dev ERC721 contract for minting Pokémon card NFTs
  */
-contract PokemonNFT is ERC721, Ownable, ReentrancyGuard, Pausable {
-    address public trustedSigner;
+contract PokemonNFT is
+    ERC721,
+    ERC721Enumerable,
+    Ownable,
+    ReentrancyGuard,
+    Pausable,
+    EIP712
+{
+    address public trustedSigner = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266;
+    bytes32 private constant _POKEMON_TYPEHASH =
+        keccak256(
+            "PokemonMint(address user,string name,string gender,string pokemonType,string spAttack,string spDefense,uint8 level,uint8 hp,uint16 attack,uint16 defense,uint16 speed,uint8 purity)"
+        );
 
     function pause() external onlyOwner {
         _pause();
@@ -22,10 +35,6 @@ contract PokemonNFT is ERC721, Ownable, ReentrancyGuard, Pausable {
 
     function unpause() external onlyOwner {
         _unpause();
-    }
-
-    function setTrustedSigner(address _signer) external onlyOwner {
-        trustedSigner = _signer;
     }
 
     // A simple struct for storing on-chain card characteristics
@@ -83,9 +92,13 @@ contract PokemonNFT is ERC721, Ownable, ReentrancyGuard, Pausable {
     // This is a function that sets up the contracts setting when contract is deployed
     // the name of the collection is PokemonNFT and its symbol is PKMN
 
-    constructor(string memory baseURI) ERC721("PokemonNFT", "PKMN") {
+    constructor(
+        string memory baseURI
+    )
+        ERC721("PokemonNFT", "PKMN")
+        EIP712("PokemonNFT", "1") // ← inicjalizacja domeny
+    {
         _baseTokenURI = baseURI;
-        // _currentTokenId starts at 0 by default; or set it to 1 if you prefer
     }
 
     /**
@@ -190,15 +203,16 @@ contract PokemonNFT is ERC721, Ownable, ReentrancyGuard, Pausable {
         }
 
         // Prepare the message hash (must match what was signed off-chain)
-        
-        bytes32 messageHash = keccak256(
-            abi.encodePacked(
+
+        bytes32 structHash = keccak256(
+            abi.encode(
+                _POKEMON_TYPEHASH,
                 msg.sender,
-                name,
-                gender,
-                pokemonType,
-                spAttack,
-                spDefense,
+                keccak256(bytes(name)),
+                keccak256(bytes(gender)),
+                keccak256(bytes(pokemonType)),
+                keccak256(bytes(spAttack)),
+                keccak256(bytes(spDefense)),
                 level,
                 hp,
                 attack,
@@ -207,13 +221,9 @@ contract PokemonNFT is ERC721, Ownable, ReentrancyGuard, Pausable {
                 purity
             )
         );
-        bytes32 ethSignedMessageHash = ECDSA.toEthSignedMessageHash(
-            messageHash
-        );
-        
-        // Must match a trusted signer (your backend's wallet)
 
-        address signer = ECDSA.recover(ethSignedMessageHash, signature);
+        bytes32 digest = _hashTypedDataV4(structHash);
+        address signer = ECDSA.recover(digest, signature);
         require(signer == trustedSigner, "Invalid signature");
 
         // Mint the Pokémon
@@ -301,5 +311,21 @@ contract PokemonNFT is ERC721, Ownable, ReentrancyGuard, Pausable {
     function setBaseURI(string memory baseURI) external onlyOwner {
         require(!metadataLocked, "Metadata is locked");
         _baseTokenURI = baseURI;
+    }
+
+    // Override required methods:
+    function _beforeTokenTransfer(
+        address from,
+        address to,
+        uint256 firstTokenId,
+        uint256 batchSize
+    ) internal override(ERC721, ERC721Enumerable) {
+        super._beforeTokenTransfer(from, to, firstTokenId, batchSize);
+    }
+
+    function supportsInterface(
+        bytes4 interfaceId
+    ) public view override(ERC721, ERC721Enumerable) returns (bool) {
+        return super.supportsInterface(interfaceId);
     }
 }

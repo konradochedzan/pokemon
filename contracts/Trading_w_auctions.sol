@@ -5,56 +5,52 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import "@openzeppelin/contracts/token/ERC721/utils/ERC721Holder.sol";
 
 /**
- * @title TradingWithAuctions
- * @notice A marketplace contract that supports both fixed-price sales and simple English auctions.
- *         Sellers can choose which type of sale they'd like for each listing.
- *         Buyers can either instantly buy fixed-price items or place bids on auction listings.
- *         All logic (listing, buying, bidding, canceling, finalizing) is handled here.
+ * @title TradingWithAuctions (escrow version)
+ * @notice Marketplace that escrows listed NFTs (sent to this contract)
+ *         Supports both fixed-price sales and simple English auctions.
  */
-contract TradingWithAuctions is Ownable, ReentrancyGuard {
+contract TradingWithAuctions is Ownable, ReentrancyGuard, ERC721Holder {
     using EnumerableSet for EnumerableSet.UintSet;
-    
 
-    /**
-     * @dev The type of sale for a particular listing.
-     *      - FixedPrice: A normal listing with a set price that can be bought instantly.
-     *      - Auction: An English auction with a start price, an end time, and a highest bidder.
-     */
+    // ─── Storage ────────────────────────────────────────────────────────────────
+
+    // nft => listed tokenIds
+    mapping(address => uint256[]) public listedTokenIds;
+    address[] public listedNFTContracts;
+
+    // nft => tokenId => listing
+    mapping(address => mapping(uint256 => Listing)) public listings;
+
+    // seller => tokenIds he/she listed
+    mapping(address => EnumerableSet.UintSet) private _sellerToListedTokenIds;
+
+    // blacklist, pause, fees
+    mapping(address => bool) public isBlacklisted;
+    bool public paused;
+    uint256 public tradingFee = 0; // basis-points (e.g. 500 = 5 %)
+    uint256 public constant MAX_PRICE = 100 ether;
+
+    // ─── Enums / Structs ────────────────────────────────────────────────────────
+
     enum SaleType {
         FixedPrice,
         Auction
     }
 
-    /**
-     * @dev This struct stores data for a single listing.
-     *      If `saleType == SaleType.FixedPrice`, the `price` field is the fixed sale price.
-     *      If `saleType == SaleType.Auction`, the `price` field is the starting bid.
-     *      `endTime` is only used for auctions.
-     *      `highestBid` and `highestBidder` track the leading bid.
-     */
     struct Listing {
-        address seller;           // Owner of the NFT
-        SaleType saleType;        // FixedPrice or Auction
-        uint256 price;           // For FixedPrice = sale price, for Auction = starting bid
-        uint256 endTime;         // Auction only: time when auction ends
-        address highestBidder;   // Auction only: current leading bidder
-        uint256 highestBid;      // Auction only: current highest bid
+        address seller;
+        SaleType saleType;
+        uint256 price; // fixed price OR starting bid
+        uint256 endTime; // auctions
+        address highestBidder; // auctions
+        uint256 highestBid; // auctions
     }
 
-    // Mapping: NFT contract => tokenId => Listing
-    mapping(address => mapping(uint256 => Listing)) public listings;
+    // ─── Events ────────────────────────────────────────────────────────────────
 
-    // For convenience: track tokenIds each seller has listed
-    mapping(address => EnumerableSet.UintSet) private _sellerToListedTokenIds;
-
-    mapping(address => bool) public isBlacklisted;
-    bool public paused;
-    uint256 public tradingFee = 0;
-    uint256 public constant MAX_PRICE = 100 ether;
-    
-    // Events
     event Listed(
         address indexed nft,
         uint256 indexed tokenId,
@@ -63,27 +59,23 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard {
         SaleType saleType,
         uint256 endTime
     );
-
     event Purchase(
         address indexed nft,
         uint256 indexed tokenId,
         address indexed buyer,
         uint256 price
     );
-
     event Cancelled(
         address indexed nft,
         uint256 indexed tokenId,
         address indexed seller
     );
-
     event NewBid(
         address indexed nft,
         uint256 indexed tokenId,
         address indexed bidder,
         uint256 amount
     );
-
     event AuctionFinalized(
         address indexed nft,
         uint256 indexed tokenId,
@@ -91,90 +83,61 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard {
         uint256 finalPrice
     );
 
-    /**
-     * @dev Ensures the contract is not paused.
-     */
+    // ─── Modifiers ──────────────────────────────────────────────────────────────
+
     modifier whenNotPaused() {
-        require(!paused, "Trading is paused");
+        require(!paused, "Trading paused");
+        _;
+    }
+    modifier notBlacklisted() {
+        require(!isBlacklisted[msg.sender], "Blacklisted");
         _;
     }
 
-    /**
-     * @dev Checking if the wallet wasn't blacklisted 
-     */
-    modifier notBlacklisted() {
-        require(!isBlacklisted[msg.sender], "Address is blacklisted");
-        _;
-    }
-    /**
-     * @notice Pause or unpause the contract.
-     * @param _paused Pass true to pause, false to unpause.
-     */
+    // ─── Admin setters ─────────────────────────────────────────────────────────
+
     function setPaused(bool _paused) external onlyOwner {
         paused = _paused;
     }
-    /**
-     * @notice Blacklist malicious users
-     * @param user users account to be blacklisted
-     */
+
     function setBlacklist(address user, bool value) external onlyOwner {
         isBlacklisted[user] = value;
     }
-    /**
-     * @notice Sets the platform trading fee, in basis points.
-     * @param fee The new fee. For example, 500 = 5%. Max allowed is 10%.
-     */
+
     function setTradingFee(uint256 fee) external onlyOwner {
-        require(fee <= 1000, "Max fee = 10%");
+        require(fee <= 1000, "Max 10%");
         tradingFee = fee;
     }
 
-    /**
-     * @notice Allows the contract owner to withdraw any accumulated fees.
-     */
     function withdraw() external onlyOwner {
         payable(owner()).transfer(address(this).balance);
     }
 
-    /**
-     * @notice Lists an NFT for either fixed-price sale or auction.
-     * @param nftContract The address of the ERC721 contract.
-     * @param tokenId The tokenId of the NFT.
-     * @param price For FixedPrice, the exact sale price. For Auction, the starting bid.
-     * @param saleType Either SaleType.FixedPrice or SaleType.Auction.
-     * @param endTime Only relevant if saleType == Auction; otherwise can be 0.
-     */
+    // ─── Listing (escrow transfer IN) ──────────────────────────────────────────
+
     function listItem(
         address nftContract,
         uint256 tokenId,
         uint256 price,
         SaleType saleType,
         uint256 endTime
-    )
-        external
-        whenNotPaused
-        nonReentrant
-        notBlacklisted
-    {
-        require(price > 0, "Price must be > 0");
-        require(price <= MAX_PRICE, "Listing price exceeds maximum allowed");
+    ) external whenNotPaused nonReentrant notBlacklisted {
+        require(price > 0 && price <= MAX_PRICE, "Price invalid");
+        IERC721 nft = IERC721(nftContract);
+        require(nft.ownerOf(tokenId) == msg.sender, "Not token owner");
         require(
-            IERC721(nftContract).ownerOf(tokenId) == msg.sender,
-            "Not token owner"
+            nft.getApproved(tokenId) == address(this) ||
+                nft.isApprovedForAll(msg.sender, address(this)),
+            "Approve first"
         );
-        require(
-            IERC721(nftContract).getApproved(tokenId) == address(this) ||
-            IERC721(nftContract).isApprovedForAll(msg.sender, address(this)),
-            "Contract not approved"
-        );
-
-        // If it's an auction, ensure endTime is in the future
         if (saleType == SaleType.Auction) {
-            require(endTime > block.timestamp, "Auction endTime invalid");
+            require(endTime > block.timestamp, "Bad endTime");
         }
 
-        // Create the listing
-        Listing memory newListing = Listing({
+        // transfer NFT to escrow (this contract)
+        nft.safeTransferFrom(msg.sender, address(this), tokenId);
+
+        listings[nftContract][tokenId] = Listing({
             seller: msg.sender,
             saleType: saleType,
             price: price,
@@ -183,160 +146,173 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard {
             highestBid: 0
         });
 
-        listings[nftContract][tokenId] = newListing;
+        listedTokenIds[nftContract].push(tokenId);
         _sellerToListedTokenIds[msg.sender].add(tokenId);
+        if (listedTokenIds[nftContract].length == 1) {
+            listedNFTContracts.push(nftContract);
+        }
 
         emit Listed(nftContract, tokenId, msg.sender, price, saleType, endTime);
     }
 
-    /**
-     * @notice Buy a listed NFT if it's a FixedPrice sale. Pays the seller, transfers the NFT.
-     * @param nftContract The address of the ERC721 contract.
-     * @param tokenId The tokenId of the NFT.
-     */
-    function buyItem(address nftContract, uint256 tokenId)
-        external
-        payable
-        whenNotPaused
-        nonReentrant
-        notBlacklisted
-    {
+    // ─── Buy (escrow transfer OUT) ─────────────────────────────────────────────
+
+    function buyItem(
+        address nftContract,
+        uint256 tokenId
+    ) external payable whenNotPaused nonReentrant notBlacklisted {
         Listing storage item = listings[nftContract][tokenId];
-        require(item.saleType == SaleType.FixedPrice, "Not a fixed price sale");
+        require(item.saleType == SaleType.FixedPrice, "Not fixed-price");
         require(item.price > 0, "Not listed");
-        require(msg.value == item.price, "Incorrect payment");
+        require(msg.value == item.price, "Wrong ETH");
 
-        // Remove listing
-        _sellerToListedTokenIds[item.seller].remove(tokenId);
-        delete listings[nftContract][tokenId];
+        _removeListing(nftContract, tokenId, item.seller);
 
-        // Calculate fee
         uint256 fee = (item.price * tradingFee) / 10000;
         uint256 sellerAmount = item.price - fee;
-
-        // Pay seller + fee
         payable(item.seller).transfer(sellerAmount);
-        if (fee > 0) {
-            payable(owner()).transfer(fee);
-        }
+        if (fee > 0) payable(owner()).transfer(fee);
 
-        // Transfer NFT to buyer
-        IERC721(nftContract).safeTransferFrom(item.seller, msg.sender, tokenId);
+        IERC721(nftContract).safeTransferFrom(
+            address(this),
+            msg.sender,
+            tokenId
+        );
 
         emit Purchase(nftContract, tokenId, msg.sender, item.price);
     }
 
-    /**
-     * @notice Cancel a listing (works for both fixed price and auction) if you are the seller.
-     * @param nftContract The ERC721 contract.
-     * @param tokenId The tokenId of the NFT.
-     */
-    function cancelListing(address nftContract, uint256 tokenId)
-        external
-        whenNotPaused
-        nonReentrant
-        notBlacklisted
-    {
-        Listing memory item = listings[nftContract][tokenId];
+    // ─── Cancel (return to seller) ─────────────────────────────────────────────
+
+    function cancelListing(
+        address nftContract,
+        uint256 tokenId
+    ) external whenNotPaused nonReentrant notBlacklisted {
+        Listing storage item = listings[nftContract][tokenId];
         require(item.price > 0, "Not listed");
         require(item.seller == msg.sender, "Not seller");
-
-        // For auctions, only allow cancel if there is no highest bid yet.
         if (item.saleType == SaleType.Auction) {
-            require(item.highestBid == 0, "Already has a bid");
+            require(item.highestBid == 0, "Bid exists");
         }
 
-        _sellerToListedTokenIds[msg.sender].remove(tokenId);
-        delete listings[nftContract][tokenId];
+        _removeListing(nftContract, tokenId, msg.sender);
+        IERC721(nftContract).safeTransferFrom(
+            address(this),
+            msg.sender,
+            tokenId
+        );
 
         emit Cancelled(nftContract, tokenId, msg.sender);
     }
 
-    /**
-     * @notice Place a bid on an auction listing.
-     * @param nftContract The ERC721 contract.
-     * @param tokenId The tokenId of the NFT.
-     */
-    function placeBid(address nftContract, uint256 tokenId)
-        external
-        payable
-        whenNotPaused
-        nonReentrant
-        notBlacklisted
-    {
+    // ─── Bidding ───────────────────────────────────────────────────────────────
+
+    function placeBid(
+        address nftContract,
+        uint256 tokenId
+    ) external payable whenNotPaused nonReentrant notBlacklisted {
         Listing storage item = listings[nftContract][tokenId];
-        require(item.saleType == SaleType.Auction, "Not an auction");
+        require(item.saleType == SaleType.Auction, "Not auction");
         require(block.timestamp < item.endTime, "Auction ended");
         require(msg.value > item.highestBid, "Bid too low");
-        require(msg.value <= MAX_PRICE, "Bid exceeds maximum allowed");
+        require(msg.value <= MAX_PRICE, "Too high");
         require(item.seller != address(0), "Not listed");
 
-        // If there's an existing bidder, refund them
         if (item.highestBid > 0) {
             payable(item.highestBidder).transfer(item.highestBid);
         }
-
-        // Record new highest bid
         item.highestBidder = msg.sender;
         item.highestBid = msg.value;
 
         emit NewBid(nftContract, tokenId, msg.sender, msg.value);
     }
 
-    /**
-     * @notice Finalize an auction if the end time has passed.
-     *         If there's a highest bidder, transfer the NFT and pay the seller.
-     *         If there was no bid, the seller keeps the NFT.
-     * @param nftContract The ERC721 contract.
-     * @param tokenId The tokenId of the NFT.
-     */
-    function finalizeAuction(address nftContract, uint256 tokenId)
-        external
-        whenNotPaused
-        nonReentrant
-    {
-        Listing storage item = listings[nftContract][tokenId];
-        require(item.saleType == SaleType.Auction, "Not an auction");
-        require(block.timestamp >= item.endTime, "Auction not ended");
-        require(item.seller != address(0), "Not listed");
+    // ─── Finalize auction ──────────────────────────────────────────────────────
 
-        // Remove from active listings
-        _sellerToListedTokenIds[item.seller].remove(tokenId);
-        delete listings[nftContract][tokenId];
+    function finalizeAuction(
+        address nftAddress,
+        uint256 tokenId
+    ) external nonReentrant {
+        Listing storage li = listings[nftAddress][tokenId];
+        require(li.saleType == SaleType.Auction, "Not an auction");
+        require(li.seller != address(0), "Listing not active");
+        require(block.timestamp >= li.endTime, "Auction still running");
 
-        // If no bids, do nothing except remove listing
-        if (item.highestBid == 0) {
-            // Seller keeps NFT, which they already hold since we never transferred it out.
-            emit AuctionFinalized(nftContract, tokenId, address(0), 0);
-            return;
+        if (li.highestBidder != address(0)) {
+            // ✅ at least one bid – send NFT to winner & ETH to seller
+            IERC721(nftAddress).transferFrom(
+                address(this),
+                li.highestBidder,
+                tokenId
+            );
+            (bool ok, ) = li.seller.call{value: li.highestBid}("");
+            require(ok, "ETH transfer failed");
+
+            emit AuctionFinalized(
+                nftAddress,
+                tokenId,
+                li.highestBidder,
+                li.highestBid
+            );
+        } else {
+            // ✅ no bids – return NFT to seller
+            IERC721(nftAddress).transferFrom(address(this), li.seller, tokenId);
+
+            emit AuctionFinalized(nftAddress, tokenId, address(0), 0);
         }
 
-        // There's a winner. Pay the seller, transfer the NFT.
-        uint256 fee = (item.highestBid * tradingFee) / 10000;
-        uint256 sellerAmount = item.highestBid - fee;
-
-        payable(item.seller).transfer(sellerAmount);
-        if (fee > 0) {
-            payable(owner()).transfer(fee);
-        }
-
-        // Transfer the NFT to the winner
-        IERC721(nftContract).safeTransferFrom(item.seller, item.highestBidder, tokenId);
-
-        emit AuctionFinalized(nftContract, tokenId, item.highestBidder, item.highestBid);
+        // delete listing & free storage
+        delete listings[nftAddress][tokenId];
     }
 
-    /**
-     * @notice Get the tokenIds a user has currently listed (either fixed price or auction).
-     * @param seller The address of the user.
-     * @return An array of token IDs.
-     */
-    function getListedTokenIds(address seller) external view returns (uint256[] memory) {
+    // ─── Views ────────────────────────────────────────────────────────────────
+
+    function getListedTokenIds(
+        address seller
+    ) external view returns (uint256[] memory) {
         uint256 count = _sellerToListedTokenIds[seller].length();
         uint256[] memory tokens = new uint256[](count);
-        for (uint256 i = 0; i < count; i++) {
+        for (uint256 i; i < count; i++)
             tokens[i] = _sellerToListedTokenIds[seller].at(i);
-        }
         return tokens;
     }
+
+    function getAllListedTokenIds(
+        address nftAddress
+    ) external view returns (uint256[] memory) {
+        uint256[] storage arr = listedTokenIds[nftAddress];
+        uint256 live;
+        for (uint256 i; i < arr.length; i++)
+            if (listings[nftAddress][arr[i]].seller != address(0)) live++;
+
+        uint256[] memory res = new uint256[](live);
+        uint256 idx;
+        for (uint256 i; i < arr.length; i++)
+            if (listings[nftAddress][arr[i]].seller != address(0))
+                res[idx++] = arr[i];
+        return res;
+    }
+
+    // ─── Internal helpers ─────────────────────────────────────────────────────
+
+    function _removeListing(
+        address nft,
+        uint256 tokenId,
+        address seller
+    ) internal {
+        _sellerToListedTokenIds[seller].remove(tokenId);
+
+        // remove from global array
+        uint256[] storage arr = listedTokenIds[nft];
+        for (uint256 i; i < arr.length; i++) {
+            if (arr[i] == tokenId) {
+                arr[i] = arr[arr.length - 1];
+                arr.pop();
+                break;
+            }
+        }
+        delete listings[nft][tokenId];
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
 }

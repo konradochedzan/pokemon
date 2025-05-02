@@ -1,729 +1,578 @@
-import React, { useState, useEffect } from 'react';
-import { ethers, parseEther } from 'ethers';
+/*  App.tsx – frontend adapted for *escrow* TradingWithAuctions
+    – fetches public listings correctly
+    – live-updates on marketplace events                                   */
 
+import React, { useState, useEffect, useCallback } from "react";
+import { ethers, BrowserProvider, parseEther } from "ethers";
 
-/**
- * Replace these with the actual ABIs from your Hardhat build artifacts.
- * For example, import them from /artifacts/contracts/PokemonNFT.sol/PokemonNFT.json if you're using Hardhat.
- */
-//import PokemonNFTArtifact from "./abis/PokemonNFT.json";
+import PokemonNFTArtifact from "./abis/PokemonNFT.json";
 import TradingArtifact from "./abis/TradingWithAuctions.json";
-import { generateSignature } from "../../scripts/generateSignature.js"; // adjust path as needed
-//const PokemonNFTAbi = PokemonNFTArtifact.abi;
-const TradingAbi = TradingArtifact.abi;
-import PokemonNFTAbi from "./abis/PokemonNFT.json";
 
-/**
- * Replace these with the addresses from your Hardhat deploy output.
- * Example:
- * PokemonNFT deployed to: 0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0
- */
+const PokemonNFTAbi = PokemonNFTArtifact.abi;
+const TradingAbi = TradingArtifact.abi;
+
+/* ─── deployed addresses (Hardhat local) ─────────────────────────────── */
 const PokemonNFTAddress = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
 const TradingAddress = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
 
-
+/* ─── component ──────────────────────────────────────────────────────── */
 export default function CompleteFrontend() {
-    const [provider, setProvider] = useState(null);
-    const [signer, setSigner] = useState(null);
-    const [userAddress, setUserAddress] = useState(null);
+    /* -- general state -- */
+    const [provider, setProvider] = useState<BrowserProvider>();
+    const [signer, setSigner] = useState<ethers.Signer>();
+    const [userAddress, setUserAddress] = useState<string>();
 
-    // Contract instances
-    const [pokemonNFTContract, setPokemonNFTContract] = useState(null);
-    const [tradingContract, setTradingContract] = useState(null);
+    /* -- contracts -- */
+    const [pokemonNFTContract, setPokemonNFT] = useState<ethers.Contract>();
+    const [tradingContract, setTrading] = useState<ethers.Contract>();
 
-    // UI states
-    const [boxPrice, setBoxPrice] = useState("");
-    const [consoleLog, setConsoleLog] = useState("");
+    /* -- UI state -- */
+    const [consoleLog, setConsoleLog] = useState<string>("");
 
-    // Auction / listing states
+    /* mystery-box */
+    const [boxPrice, setBoxPrice] = useState<string>("0.01");
+
+    /* listing params */
     const [tokenIdForSale, setTokenIdForSale] = useState("");
     const [salePrice, setSalePrice] = useState("");
-    const [saleType, setSaleType] = useState("FixedPrice");
+    const [saleType, setSaleType] = useState<"FixedPrice" | "Auction">("FixedPrice");
     const [auctionEndTime, setAuctionEndTime] = useState("");
 
+    /* buy / bid / finalize params */
     const [tokenIdToBuy, setTokenIdToBuy] = useState("");
     const [buyPrice, setBuyPrice] = useState("");
-
     const [tokenIdToBid, setTokenIdToBid] = useState("");
     const [bidAmount, setBidAmount] = useState("");
+    const [tokenIdToFin, setTokenIdToFin] = useState("");
+    const [tokenIdToCancel, setTokenIdToCancel] = useState("");
 
-    const [tokenIdToFinalize, setTokenIdToFinalize] = useState("");
+    /* data -- owned + public */
+    const [ownedTokens, setOwned] = useState<any[]>([]);
+    const [listedTokens, setListed] = useState<any[]>([]);
+    const [finalizedCache, setFinalizedCache] = useState<Set<string>>(new Set());
+    const [isConnecting, setIsConnecting] = useState(false);
+    /* ─── helper: log to on-screen console ─────────────────────────────── */
+    const pushLog = (msg: string) => setConsoleLog(prev => prev + "\n" + msg);
 
-    // Admin minting info
-    const [adminPokemon, setAdminPokemon] = useState({
-        name: "Charizard",
-        gender: "Male",
-        pokemonType: "Fire",
-        spAttack: "Flamethrower",
-        spDefense: "Flame Shield",
-        level: 36,
-        hp: 120,
-        attack: 140,
-        defense: 90,
-        speed: 100,
-        purity: 255,
-    });
-    // 🧬 Owned NFTs
-    const [ownedTokens, setOwnedTokens] = useState([]);
-
-    /**
-     * 1. On component mount, try to set up ethers (if window.ethereum is present)
-     */
     useEffect(() => {
-        if (window.ethereum) {
-            const tempProvider = new ethers.BrowserProvider(window.ethereum);
-            setProvider(tempProvider);
-        } else {
-            console.log("Please install MetaMask!");
-        }
+        const timer = setInterval(() => {
+            setListed((prev) => [...prev]); // trigger re-render
+        }, 1000);
+        return () => clearInterval(timer);
     }, []);
 
-    /**
-     * 2. Once the contracts are set, listen for events
-     */
-    useEffect(() => {
-        if (!pokemonNFTContract || !tradingContract) return;
 
-        // Attach event listeners
-        pokemonNFTContract.on("PokemonCardMinted", (owner, tokenId, name) => {
-            setConsoleLog((prev) =>
-                prev + `\nNew Pokemon Minted! Token ID: ${tokenId.toString()} - Owner: ${owner}`
-            );
-        });
-
-        tradingContract.on("Listed", (nft, tokenId, seller, price, sType, endTime) => {
-            setConsoleLog((prev) =>
-                prev +
-                `\nNFT Listed: Token #${tokenId.toString()} at ${ethers.formatEther(price)} ETH`
-            );
-        });
-
-        tradingContract.on("Purchase", (nft, tokenId, buyer, price) => {
-            setConsoleLog((prev) =>
-                prev +
-                `\nNFT Purchased! Token #${tokenId.toString()} by ${buyer} for ${ethers.formatEther(
-                    price
-                )} ETH`
-            );
-        });
-
-        tradingContract.on("NewBid", (nft, tokenId, bidder, amount) => {
-            setConsoleLog((prev) =>
-                prev +
-                `\nNew Bid: ${ethers.formatEther(amount)} ETH on Token #${tokenId.toString()} by ${bidder}`
-            );
-        });
-
-        tradingContract.on("AuctionFinalized", (nft, tokenId, winner, finalPrice) => {
-            if (winner === ethers.ZeroAddress) {
-                setConsoleLog(
-                    (prev) => prev + `\nAuction ended for Token #${tokenId.toString()}, but no bids.`
-                );
-            } else {
-                setConsoleLog(
-                    (prev) =>
-                        prev +
-                        `\nAuction Finalized! Token #${tokenId.toString()} won by ${winner} for ${ethers.formatEther(
-                            finalPrice
-                        )} ETH`
-                );
-            }
-        });
-
-        // Cleanup: remove listeners when unmounting or re-rendering
-        return () => {
-            pokemonNFTContract.removeAllListeners("PokemonCardMinted");
-            tradingContract.removeAllListeners("Listed");
-            tradingContract.removeAllListeners("Purchase");
-            tradingContract.removeAllListeners("NewBid");
-            tradingContract.removeAllListeners("AuctionFinalized");
+    function normalizeAttrs(raw: any) {
+        return {
+            name: raw.name,
+            gender: raw.gender,
+            pokemonType: raw.pokemonType,
+            spAttack: raw.spAttack,
+            spDefense: raw.spDefense,
+            level: Number(raw.level),
+            hp: Number(raw.hp),
+            attack: Number(raw.attack),
+            defense: Number(raw.defense),
+            speed: Number(raw.speed),
+            purity: Number(raw.purity)
         };
-    }, [pokemonNFTContract, tradingContract]);
+    }
 
-    /**
-     * 3. Connect wallet + set up signer + instantiate contracts
-     */
+    function formatCountdown(secondsLeft: number): string {
+        if (secondsLeft <= 0) return "Expired";
+
+        const hours = Math.floor(secondsLeft / 3600);
+        const minutes = Math.floor((secondsLeft % 3600) / 60);
+        const seconds = secondsLeft % 60;
+
+        return `${hours}h ${minutes}m ${seconds}s`;
+    }
+    /* ─── fetch owned pokémon ──────────────────────────────────────────── */
+    const fetchOwnedPokemon = useCallback(
+        async (nft: ethers.Contract, addr: string) => {
+            try {
+                const bal = await nft.balanceOf(addr);
+                const temp: any[] = [];
+                for (let i = 0; i < bal; i++) {
+                    const tid = await nft.tokenOfOwnerByIndex(addr, i);
+                    const attrs = await nft.getPokemonAttributes(tid);
+                    temp.push({
+                        tokenId: tid.toString(),
+                        ...normalizeAttrs(attrs)
+                    });
+                }
+                setOwned(temp);
+            } catch (e: any) { console.error(e); pushLog("Could not fetch owned Pokémon"); }
+        }, []
+    );
+
+    /* ─── fetch public listings (escrow) ───────────────────────────────── */
+    const fetchPublicListings = useCallback(
+        async (mkt: ethers.Contract, nft: ethers.Contract) => {
+            if (!mkt || !nft) return;
+
+            try {
+                const tids: bigint[] = await mkt.getAllListedTokenIds(PokemonNFTAddress);
+
+                // Delete duplicates on the entrance
+                const uniq = [...new Set(tids.map(t => t.toString()))];
+
+                const list: any[] = [];
+
+                for (const id of uniq) {
+                    try {
+                        const tid = BigInt(id);
+                        const li = await mkt.listings(PokemonNFTAddress, tid);
+                        const att = await nft.getPokemonAttributes(tid);
+
+                        // Skip empty listings
+                        if (li.seller === ethers.ZeroAddress) continue;
+
+                        const saleTypeEnum = Number(li.saleType); // 0 = Auction, 1 = FixedPrice
+                        const isAuction = saleTypeEnum === 1;
+
+                        const bidOrPrice =
+                            isAuction && li.highestBid > 0n ? li.highestBid : li.price;
+                        const priceEth = ethers.formatEther(bidOrPrice);
+
+                        list.push({
+                            tokenId: tid.toString(),
+                            price: priceEth,
+                            saleType: isAuction ? "Auction" : "FixedPrice",
+                            endTime: Number(li.endTime),
+                            seller: li.seller.toLowerCase(),
+                            highestBidder: li.highestBidder.toLowerCase(),
+                            highestBid: li.highestBid,
+                            ...normalizeAttrs(att)
+                        });
+                    } catch (e) {
+                        console.error(`Failed to load token ${id}:`, e);
+                    }
+                }
+
+                setListed(list);
+            } catch (e: any) {
+                console.error("❌ fetchPublicListings error:", e);
+                pushLog(`❌ Failed to fetch public listings: ${e?.reason || e?.message}`);
+            }
+        },
+        []
+    );
+
+
+    useEffect(() => {
+        if (!tradingContract || !pokemonNFTContract) return;
+
+        const timer = setInterval(async () => {
+            const now = Date.now() / 1e3;
+
+            const candidates = listedTokens.filter(
+                l =>
+                    l.saleType === "Auction" &&
+                    l.endTime <= now &&
+                    !finalizedCache.has(l.tokenId)
+            );
+
+            if (candidates.length === 0) return;
+
+            for (const l of candidates) {
+                try {
+                  
+                    await tradingContract.callStatic.finalizeAuction(
+                        PokemonNFTAddress,
+                        l.tokenId
+                    );
+
+                    /* 2️⃣  właściwa transakcja */
+                    const tx = await tradingContract.finalizeAuction(
+                        PokemonNFTAddress,
+                        l.tokenId
+                    );
+                    pushLog(`⏳ Finalizing auction #${l.tokenId}…`);
+                    await tx.wait();
+                    pushLog(`🏁 Auction #${l.tokenId} finalized!`);
+
+
+                } catch (e: any) {
+
+                    if (!/Listing.*active|Auction/i.test(e?.reason || "")) console.error(e);
+                } finally {
+
+                    setFinalizedCache(prev => new Set(prev).add(l.tokenId));
+                }
+            }
+            await fetchPublicListings(tradingContract, pokemonNFTContract);
+            if (userAddress) await fetchOwnedPokemon(pokemonNFTContract, userAddress);
+        }, 15_000);
+
+        return () => clearInterval(timer);
+    }, [
+        listedTokens,
+        tradingContract,
+        pokemonNFTContract,
+        fetchPublicListings,
+        fetchOwnedPokemon,
+        userAddress,
+        finalizedCache
+    ]);
+
+    /* ─── connect wallet ───────────────────────────────────────────────── */
     const connectWallet = async () => {
-        if (!provider) return;
+        if (!window.ethereum) { alert("Install MetaMask"); return; }
+
+        // 1️⃣ blokada wielokrotnego kliknięcia
+        if (isConnecting || userAddress) return;
+        setIsConnecting(true);
+
         try {
-            // Request accounts
-            await provider.send("eth_requestAccounts", []);
-            const tempSigner = await provider.getSigner();
-            const address = await tempSigner.getAddress();
+            const tempProv = new BrowserProvider(window.ethereum);
+
+            const already = await tempProv.send("eth_accounts", []);
+            if (already.length === 0) {
+                try {
+
+                    await tempProv.send("eth_requestAccounts", []);
+                } catch (e: any) {
+
+                    if (e.code === -32002) {
+                        pushLog("🕑 Połączenie MetaMask już czeka – zaakceptuj lub zamknij okno");
+                        return;
+                    }
+                    throw e; 
+                }
+            }
+
+
+            const tempSigner = await tempProv.getSigner();
+            const addr = (await tempSigner.getAddress()).toLowerCase();
+
+            setProvider(tempProv);
             setSigner(tempSigner);
-            setUserAddress(address);
-            setConsoleLog(`Connected as: ${address}`);
+            setUserAddress(addr);
+            pushLog(`✅ Connected as ${addr}`);
 
-            // Instatiate the NFT contract
-            const nftContract = new ethers.Contract(
-                PokemonNFTAddress,
-                PokemonNFTAbi,
-                tempSigner
-            );
-            setPokemonNFTContract(nftContract);
+            const nft = new ethers.Contract(PokemonNFTAddress, PokemonNFTAbi, tempSigner);
+            const mkt = new ethers.Contract(TradingAddress, TradingAbi, tempSigner);
+            setPokemonNFT(nft);
+            setTrading(mkt);
 
-            // Instantiate the Trading contract
-            const tradeContract = new ethers.Contract(
-                TradingAddress,
-                TradingAbi,
-                tempSigner
-            );
-            setTradingContract(tradeContract);
 
-            // Read box price from NFT contract
-            setBoxPrice("0.01");
-        } catch (err) {
-            console.error(err);
-            setConsoleLog(`Error: ${err.message}`);
+            await Promise.all([
+                fetchOwnedPokemon(nft, addr),
+                fetchPublicListings(mkt, nft)
+            ]);
+
+        } catch (e: any) {
+            console.error(e);
+            pushLog(`❌ ${e?.reason || e?.message}`);
+        } finally {
+            setIsConnecting(false);
         }
     };
 
-    /**
-     * 4. Mystery Box Purchase
-     */
+
+
+    /* ─── event listeners – refresh marketplace automatically ──────────── */
+    useEffect(() => {
+        if (!tradingContract || !pokemonNFTContract) return;
+
+        const refresh = () => fetchPublicListings(tradingContract, pokemonNFTContract);
+
+        tradingContract.on("Listed", refresh);
+        tradingContract.on("Listed", () => {
+            if (userAddress) fetchOwnedPokemon(pokemonNFTContract, userAddress);
+        });
+        tradingContract.on("Purchase", refresh);
+        tradingContract.on("Cancelled", refresh);
+        tradingContract.on("AuctionFinalized", refresh);
+
+        return () => {
+            tradingContract.off("Listed", refresh);
+            tradingContract.off("Purchase", refresh);
+            tradingContract.off("Cancelled", refresh);
+            tradingContract.off("AuctionFinalized", refresh);
+        };
+    }, [tradingContract, pokemonNFTContract, fetchPublicListings]);
+
+    /* ─── mystery box ──────────────────────────────────────────────────── */
     const openMysteryBox = async () => {
-        if (!pokemonNFTContract || !signer) {
-            setConsoleLog("Not connected.");
-            return;
-        }
-
+        if (!pokemonNFTContract || !signer) return pushLog("Not connected");
         try {
-            const name = "Pikachu";
-            const gender = "Male";
-            const pokemonType = "Electric";
-            const spAttack = "Thunderbolt";
-            const spDefense = "Static Field";
-            const level = 5;
-            const hp = 35;
-            const attack = 55;
-            const defense = 40;
-            const speed = 90;
-            const purity = 255;
-
-            const signature = await generateSignature(
-                userAddress,
-                name,
-                gender,
-                pokemonType,
-                spAttack,
-                spDefense,
-                level,
-                hp,
-                attack,
-                defense,
-                speed,
-                purity
-            );
-
-            console.log({ name, gender, pokemonType, spAttack, spDefense, level, hp, attack, defense, speed, purity });
+            const res = await fetch("http://localhost:3001/sign", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ userAddress })
+            });
+            const p = await res.json();
 
             const tx = await pokemonNFTContract.openMysteryBox(
-                name,
-                gender,
-                pokemonType,
-                spAttack,
-                spDefense,
-                level,
-                hp,
-                attack,
-                defense,
-                speed,
-                purity,
-                signature,
-                {
-                    value: parseEther("0.01"),
-                }
-            );
-
-            await tx.wait();
-            setConsoleLog("🎉 Mystery Box Opened!");
-            await fetchOwnedPokemon();
-        } catch (err) {
-            console.error("🛑 openMysteryBox error:", err);
-            setConsoleLog(err.message || "Unknown error");
-        }
-    };
-    const fetchOwnedPokemon = async () => {
-        console.log("📦 Contract loaded?", pokemonNFTContract);
-        console.log("🧑 User address:", userAddress);
-        if (!pokemonNFTContract || !userAddress) return;
-
-        try {
-            const balance = await pokemonNFTContract.balanceOf(userAddress);
-            const owned = [];
-
-            for (let i = 0; i < balance; i++) {
-                const tokenId = await pokemonNFTContract.tokenOfOwnerByIndex(userAddress, i);
-                const details = await pokemonNFTContract.getPokemon(tokenId);
-
-                owned.push({
-                    tokenId: tokenId.toString(),
-                    ...details,
-                });
-            }
-
-            setOwnedTokens(owned);
-        } catch (err) {
-            console.error("Error fetching owned Pokémon:", err);
-            setConsoleLog("❌ Failed to fetch owned Pokémon.");
-        }
-    };
-
-
-    /**
-     * 5. Admin Mint (onlyOwner)
-     */
-    const adminMintPokemon = async () => {
-        if (!pokemonNFTContract || !signer) {
-            setConsoleLog("Not connected.");
-            return;
-        }
-        try {
-            const {
-                name,
-                gender,
-                pokemonType,
-                spAttack,
-                spDefense,
-                level,
-                hp,
-                attack,
-                defense,
-                speed,
-                purity,
-            } = adminPokemon;
-
-            const tx = await pokemonNFTContract.mintRandomPokemon(
-                name,
-                gender,
-                pokemonType,
-                spAttack,
-                spDefense,
-                level,
-                hp,
-                attack,
-                defense,
-                speed,
-                purity
+                p.name, p.gender, p.pokemonType, p.spAttack, p.spDefense,
+                p.level, p.hp, p.attack, p.defense, p.speed, p.purity,
+                p.signature,
+                { value: parseEther(boxPrice) }
             );
             await tx.wait();
-            setConsoleLog("Admin minted a new Pokemon!");
-            await fetchOwnedPokemon();
-        } catch (err) {
-            console.error(err);
-            setConsoleLog(err.message);
-        }
+            pushLog("🎉 Mystery box opened!");
+            fetchOwnedPokemon(pokemonNFTContract, userAddress!);
+        } catch (e: any) { console.error(e); pushLog(e.message); }
     };
 
-    const setTrustedSigner = async () => {
-        if (!pokemonNFTContract || !signer) {
-            setConsoleLog("Not connected.");
-            return;
-        }
-
-        try {
-            const tx = await pokemonNFTContract.setTrustedSigner(await signer.getAddress());
-            await tx.wait();
-            setConsoleLog("✅ Trusted signer set to your address.");
-        } catch (err) {
-            console.error(err);
-            setConsoleLog(`Error: ${err.message}`);
-        }
-    };
-
-
-    /**
-     * 6. List NFT (fixed or auction)
-     */
+    /* ─── list NFT (escrow) ────────────────────────────────────────────── */
     const listNFT = async () => {
-        if (!tradingContract) return;
-
+        if (!tradingContract || !pokemonNFTContract) return;
         try {
-            // Convert saleType string to enum in your contract (0=FixedPrice, 1=Auction)
-            let saleTypeEnum = 0; // default to 0 for FixedPrice
-            if (saleType === "Auction") {
-                saleTypeEnum = 1;
-            }
-
-            // parse salePrice to Wei
-            const priceInWei = ethers.parseEther(salePrice);
-            const endTimeUnix = auctionEndTime ? Number(auctionEndTime) : 0;
-
+            await pokemonNFTContract.approve(TradingAddress, tokenIdForSale);
+            const enumVal = saleType === "Auction" ? 1 : 0;
+            const priceWei = parseEther(salePrice);
+            const endUnix = saleType === "Auction"
+                ? Math.floor(Date.now() / 1000) + Number(auctionEndTime) * 60
+                : 0;
             const tx = await tradingContract.listItem(
                 PokemonNFTAddress,
                 tokenIdForSale,
-                priceInWei,
-                saleTypeEnum,
-                endTimeUnix
+                priceWei,
+                enumVal,
+                endUnix
             );
             await tx.wait();
-            setConsoleLog("NFT Listed Successfully!");
-        } catch (err) {
-            setConsoleLog(err.message);
-            console.error(err);
-        }
+            pushLog("✅ Listed!");
+            await Promise.all([
+                fetchPublicListings(tradingContract, pokemonNFTContract),
+                userAddress && fetchOwnedPokemon(pokemonNFTContract, userAddress)
+            ]);
+        } catch (e: any) { console.error(e); pushLog(e.message); }
     };
 
-    /**
-     * 7. Buy NFT (fixed price)
-     */
+    /* ─── buy fixed price ──────────────────────────────────────────────── */
     const buyNFT = async () => {
-        if (!tradingContract) return;
+        if (!tradingContract || !pokemonNFTContract || !userAddress) return;
         try {
-            const priceWei = ethers.parseEther(buyPrice);
-            const tx = await tradingContract.buyItem(PokemonNFTAddress, tokenIdToBuy, {
-                value: priceWei,
-            });
+            const tx = await tradingContract.buyItem(
+                PokemonNFTAddress,
+                tokenIdToBuy,
+                { value: parseEther(buyPrice) }
+            );
             await tx.wait();
-            setConsoleLog(`Bought token #${tokenIdToBuy}`);
-        } catch (err) {
-            setConsoleLog(err.message);
-            console.error(err);
+            pushLog(`🛒 Bought token #${tokenIdToBuy}`);
+
+            await Promise.all([
+                fetchPublicListings(tradingContract, pokemonNFTContract),
+                fetchOwnedPokemon(pokemonNFTContract, userAddress)
+            ]);
+        } catch (e: any) {
+            console.error(e);
+            pushLog(e.message);
         }
     };
 
-    /**
-     * 8. Place Bid (auction)
-     */
+
+    /* ─── bid & finalize ──────────────────────────────────────────────── */
     const placeBid = async () => {
         if (!tradingContract) return;
         try {
-            const bidWei = ethers.parseEther(bidAmount);
-            const tx = await tradingContract.placeBid(PokemonNFTAddress, tokenIdToBid, {
-                value: bidWei,
-            });
+            const tx = await tradingContract.placeBid(
+                PokemonNFTAddress,
+                tokenIdToBid,
+                { value: parseEther(bidAmount) }
+            );
             await tx.wait();
-            setConsoleLog("Bid placed successfully.");
-        } catch (err) {
-            setConsoleLog(err.message);
-            console.error(err);
-        }
+            pushLog("💰 Bid placed");
+            await fetchPublicListings(tradingContract, pokemonNFTContract)
+        } catch (e: any) { console.error(e); pushLog(e.message); }
     };
 
-    /**
-     * 9. Finalize Auction
-     */
     const finalizeAuction = async () => {
         if (!tradingContract) return;
         try {
-            const tx = await tradingContract.finalizeAuction(
-                PokemonNFTAddress,
-                tokenIdToFinalize
-            );
+            const tx = await tradingContract.finalizeAuction(PokemonNFTAddress, tokenIdToFin);
             await tx.wait();
-            setConsoleLog("Auction finalized!");
-        } catch (err) {
-            setConsoleLog(err.message);
-            console.error(err);
+            pushLog("🏁 Auction finalized");
+            await fetchPublicListings(tradingContract, pokemonNFTContract);
+            await fetchOwnedPokemon(pokemonNFTContract, userAddress!);
+        } catch (e: any) { console.error(e); pushLog(e.message); }
+    };
+    const cancelListing = async (tokenId: string) => {
+        if (!tradingContract || !pokemonNFTContract) return;
+        try {
+            const tx = await tradingContract.cancelListing(PokemonNFTAddress, tokenId);
+            await tx.wait();
+
+            pushLog(`🗑 Listing for token #${tokenId} cancelled`);
+
+            // refresh UI
+            await fetchOwnedPokemon(pokemonNFTContract, userAddress!);
+            await fetchPublicListings(tradingContract, pokemonNFTContract);
+        } catch (e: any) {
+            console.error(e);
+            const msg = e?.reason || e?.message || "";
+            if (msg.includes("Not seller")) {
+                pushLog("That listing wasn't created by you");
+            } else {
+                pushLog(`❌ Cancel failed: ${msg}`);
+            }
         }
+
     };
 
+    /* ─── JSX ─────────────────────────────────────────────────────────── */
     return (
-        <div className="p-4">
-            <h1 className="text-2xl font-bold">Pokémon Marketplace</h1>
+        <div className="p-4 space-y-4">
+            <h1 className="text-3xl font-bold">Pokémon Marketplace</h1>
 
-            {/* Connect Button */}
-            {!userAddress && (
-                <button
-                    onClick={connectWallet}
-                    className="p-2 bg-blue-500 text-white rounded mt-2"
-                >
+            {!userAddress &&
+                <button className="bg-blue-500 text-white rounded p-2" onClick={connectWallet}>
                     Connect MetaMask
-                </button>
-            )}
-            <p>Connected as: {userAddress || "Not connected"}</p>
+                </button>}
+            <p>Wallet: {userAddress ?? "—"}</p>
 
-            {/* Mystery Box */}
-            <div className="mt-4 border p-4">
-                <h2 className="font-bold">Open Mystery Box</h2>
-                <p>Box Price: {boxPrice} ETH</p>
-                <button
-                    onClick={openMysteryBox}
-                    className="p-2 bg-green-500 text-white rounded"
-                >
-                    Buy Mystery Box
-                </button>
-            </div>
+            {/* console */}
+            <pre className="bg-gray-200 p-2 h-32 overflow-auto rounded">{consoleLog}</pre>
 
-            {/* Admin Mint */}
-            <div className="mt-4 border p-4">
-                <h2 className="font-bold">Admin Mint (onlyOwner)</h2>
-                <div className="flex flex-col space-y-2">
-                    <label>
-                        Name:
-                        <input
-                            type="text"
-                            value={adminPokemon.name}
-                            onChange={(e) =>
-                                setAdminPokemon({ ...adminPokemon, name: e.target.value })
-                            }
-                            className="border ml-2"
-                        />
-                    </label>
-                    <label>
-                        Gender:
-                        <input
-                            type="text"
-                            value={adminPokemon.gender}
-                            onChange={(e) =>
-                                setAdminPokemon({ ...adminPokemon, gender: e.target.value })
-                            }
-                            className="border ml-2"
-                        />
-                    </label>
-                    <label>
-                        PokemonType:
-                        <input
-                            type="text"
-                            value={adminPokemon.pokemonType}
-                            onChange={(e) =>
-                                setAdminPokemon({ ...adminPokemon, pokemonType: e.target.value })
-                            }
-                            className="border ml-2"
-                        />
-                    </label>
-                    <label>
-                        spAttack:
-                        <input
-                            type="text"
-                            value={adminPokemon.spAttack}
-                            onChange={(e) =>
-                                setAdminPokemon({ ...adminPokemon, spAttack: e.target.value })
-                            }
-                            className="border ml-2"
-                        />
-                    </label>
-                    <label>
-                        spDefense:
-                        <input
-                            type="text"
-                            value={adminPokemon.spDefense}
-                            onChange={(e) =>
-                                setAdminPokemon({ ...adminPokemon, spDefense: e.target.value })
-                            }
-                            className="border ml-2"
-                        />
-                    </label>
-                    <label>
-                        Level:
-                        <input
-                            type="number"
-                            value={adminPokemon.level}
-                            onChange={(e) =>
-                                setAdminPokemon({ ...adminPokemon, level: Number(e.target.value) })
-                            }
-                            className="border ml-2"
-                        />
-                    </label>
-                    <label>
-                        HP:
-                        <input
-                            type="number"
-                            value={adminPokemon.hp}
-                            onChange={(e) =>
-                                setAdminPokemon({ ...adminPokemon, hp: Number(e.target.value) })
-                            }
-                            className="border ml-2"
-                        />
-                    </label>
-                    <label>
-                        Attack:
-                        <input
-                            type="number"
-                            value={adminPokemon.attack}
-                            onChange={(e) =>
-                                setAdminPokemon({ ...adminPokemon, attack: Number(e.target.value) })
-                            }
-                            className="border ml-2"
-                        />
-                    </label>
-                    <label>
-                        Defense:
-                        <input
-                            type="number"
-                            value={adminPokemon.defense}
-                            onChange={(e) =>
-                                setAdminPokemon({ ...adminPokemon, defense: Number(e.target.value) })
-                            }
-                            className="border ml-2"
-                        />
-                    </label>
-                    <label>
-                        Speed:
-                        <input
-                            type="number"
-                            value={adminPokemon.speed}
-                            onChange={(e) =>
-                                setAdminPokemon({ ...adminPokemon, speed: Number(e.target.value) })
-                            }
-                            className="border ml-2"
-                        />
-                    </label>
-                    <label>
-                        Purity:
-                        <input
-                            type="number"
-                            value={adminPokemon.purity}
-                            onChange={(e) =>
-                                setAdminPokemon({ ...adminPokemon, purity: Number(e.target.value) })
-                            }
-                            className="border ml-2"
-                        />
-                    </label>
-                </div>
-                <button
-                    onClick={adminMintPokemon}
-                    className="p-2 bg-blue-500 text-white rounded mt-2"
-                >
-                    Admin Mint
+            {/* mystery box */}
+            <section className="border p-4 rounded">
+                <h2 className="font-semibold">Open Mystery Box ({boxPrice} ETH)</h2>
+                <button className="bg-green-600 text-white rounded p-2 mt-2" onClick={openMysteryBox}>
+                    Buy & Open
                 </button>
-            </div>
-            <button
-                onClick={setTrustedSigner}
-                className="p-2 bg-red-500 text-white rounded mt-2"
-            >
-                Set Trusted Signer (Dev)
-            </button>
-            {/* List NFT */}
-            <div className="mt-4 border p-4">
-                <h2 className="font-bold">List NFT (Fixed or Auction)</h2>
-                <label>Token ID:</label>
-                <input
-                    type="text"
-                    className="border ml-2"
+            </section>
+
+            {/* list NFT */}
+            <section className="border p-4 rounded">
+                <h2 className="font-semibold">List NFT</h2>
+                <input placeholder="Token ID"
                     value={tokenIdForSale}
-                    onChange={(e) => setTokenIdForSale(e.target.value)}
-                />
-                <label className="ml-2">Price (ETH):</label>
-                <input
-                    type="text"
-                    className="border ml-2"
+                    onChange={e => setTokenIdForSale(e.target.value)}
+                    className="border p-1 mr-2" />
+                <input placeholder="Price (ETH)"
                     value={salePrice}
-                    onChange={(e) => setSalePrice(e.target.value)}
-                />
-                <div className="mt-2">
-                    <select
-                        value={saleType}
-                        onChange={(e) => setSaleType(e.target.value)}
-                        className="border"
-                    >
-                        <option value="FixedPrice">Fixed Price</option>
-                        <option value="Auction">Auction</option>
-                    </select>
+                    onChange={e => setSalePrice(e.target.value)}
+                    className="border p-1 mr-2" />
+                <select value={saleType} onChange={e => setSaleType(e.target.value as any)}
+                    className="border p-1 mr-2">
+                    <option>FixedPrice</option><option>Auction</option>
+                </select>
+                {saleType === "Auction" &&
+                    <input placeholder="End (unix time)"
+                        value={auctionEndTime}
+                        onChange={e => setAuctionEndTime(e.target.value)}
+                        className="border p-1 mt-2" />}
+                <button onClick={listNFT} className="bg-purple-600 text-white rounded p-2 mt-2">
+                    List
+                </button>
+            </section>
+
+            {/* buy / bid / finalize */}
+            <section className="grid md:grid-cols-4 gap-4">
+                <div className="border p-4 rounded">
+                    <h3 className="font-semibold">Buy (Fixed)</h3>
+                    <input placeholder="Token ID"
+                        value={tokenIdToBuy}
+                        onChange={e => setTokenIdToBuy(e.target.value)}
+                        className="border p-1 mr-2" />
+                    <input placeholder="Price ETH"
+                        value={buyPrice}
+                        onChange={e => setBuyPrice(e.target.value)}
+                        className="border p-1" />
+                    <button className="bg-blue-600 text-white rounded p-2 mt-2" onClick={buyNFT}>
+                        Buy
+                    </button>
                 </div>
-                {saleType === "Auction" && (
-                    <div>
-                        <label> End Time (Unix timestamp): </label>
-                        <input
-                            type="text"
-                            value={auctionEndTime}
-                            onChange={(e) => setAuctionEndTime(e.target.value)}
-                            className="border ml-2"
-                        />
-                    </div>
-                )}
-                <button
-                    onClick={listNFT}
-                    className="p-2 bg-purple-500 text-white rounded mt-2"
-                >
-                    List NFT
-                </button>
-            </div>
+                <div className="border p-4 rounded">
+                    <h3 className="font-semibold">Bid (Auction)</h3>
+                    <input placeholder="Token ID"
+                        value={tokenIdToBid}
+                        onChange={e => setTokenIdToBid(e.target.value)}
+                        className="border p-1 mr-2" />
+                    <input placeholder="Bid ETH"
+                        value={bidAmount}
+                        onChange={e => setBidAmount(e.target.value)}
+                        className="border p-1" />
+                    <button className="bg-orange-600 text-white rounded p-2 mt-2" onClick={placeBid}>
+                        Bid
+                    </button>
+                </div>
+                <div className="border p-4 rounded">
+                    <h3 className="font-semibold">Finalize Auction</h3>
+                    <input placeholder="Token ID"
+                        value={tokenIdToFin}
+                        onChange={e => setTokenIdToFin(e.target.value)}
+                        className="border p-1" />
+                    <button className="bg-red-600 text-white rounded p-2 mt-2" onClick={finalizeAuction}>
+                        Finalize
+                    </button>
+                </div>
 
-            {/* Buy NFT */}
-            <div className="mt-4 border p-4">
-                <h2 className="font-bold">Buy NFT (Fixed Price)</h2>
-                <label>Token ID:</label>
-                <input
-                    type="text"
-                    className="border ml-2"
-                    value={tokenIdToBuy}
-                    onChange={(e) => setTokenIdToBuy(e.target.value)}
-                />
-                <label className="ml-2">Price (ETH):</label>
-                <input
-                    type="text"
-                    className="border ml-2"
-                    value={buyPrice}
-                    onChange={(e) => setBuyPrice(e.target.value)}
-                />
-                <button
-                    onClick={buyNFT}
-                    className="p-2 bg-yellow-500 text-white rounded mt-2"
-                >
-                    Buy NFT
-                </button>
-            </div>
+                <div className="border p-4 rounded">
+                    <h3 className="font-semibold">Cancel Listing</h3>
 
-            {/* Place Bid */}
-            <div className="mt-4 border p-4">
-                <h2 className="font-bold">Place a Bid (Auction)</h2>
-                <label>Token ID:</label>
-                <input
-                    type="text"
-                    className="border ml-2"
-                    value={tokenIdToBid}
-                    onChange={(e) => setTokenIdToBid(e.target.value)}
-                />
-                <label className="ml-2">Bid (ETH):</label>
-                <input
-                    type="text"
-                    className="border ml-2"
-                    value={bidAmount}
-                    onChange={(e) => setBidAmount(e.target.value)}
-                />
-                <button
-                    onClick={placeBid}
-                    className="p-2 bg-red-500 text-white rounded mt-2"
-                >
-                    Place Bid
-                </button>
-            </div>
+                    <input
+                        placeholder="Token ID"
+                        value={tokenIdToCancel}
+                        onChange={e => setTokenIdToCancel(e.target.value)}
+                        className="border p-1"
+                    />
 
-            {/* Finalize Auction */}
-            <div className="mt-4 border p-4">
-                <h2 className="font-bold">Finalize Auction</h2>
-                <label>Token ID:</label>
-                <input
-                    type="text"
-                    className="border ml-2"
-                    value={tokenIdToFinalize}
-                    onChange={(e) => setTokenIdToFinalize(e.target.value)}
-                />
-                <button
-                    onClick={finalizeAuction}
-                    className="p-2 bg-green-500 text-white rounded mt-2"
-                >
-                    Finalize
-                </button>
-            </div>
-            <div className="mt-4 p-4 border">
-                <h2 className="font-bold text-xl mb-2">🎴 My Pokémon</h2>
-                {ownedTokens.length === 0 ? (
-                    <p>No Pokémon owned yet.</p>
-                ) : (
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                        {ownedTokens.map((p, i) => (
-                            <div key={i} className="p-3 border rounded bg-white shadow">
-                                <h3 className="font-bold">{p.name} (#{p.tokenId})</h3>
+                    <button
+                        className="bg-gray-600 text-white rounded p-2 mt-2"
+                        onClick={() => cancelListing(tokenIdToCancel)}
+                    >
+                        Cancel
+                    </button>
+                </div>
+
+            </section>
+
+            {/* public listings */}
+            <section className="border p-4 rounded">
+                <h2 className="text-xl font-bold">🌍 Public Listings</h2>
+                {listedTokens.length === 0
+                    ? <p>No NFTs listed right now.</p>
+                    : <div className="grid md:grid-cols-3 gap-4 mt-3">
+                        {listedTokens.map((p, i) => (
+                            <div key={i} className="border rounded shadow p-3">
+                                <h3 className="font-bold">{p.name} #{p.tokenId}</h3>
                                 <p>Type: {p.pokemonType}</p>
-                                <p>Level: {p.level.toString()}</p>
-                                <p>HP: {p.hp.toString()}</p>
-                                <p>ATK: {p.attack.toString()} | DEF: {p.defense.toString()} | SPD: {p.speed.toString()}</p>
-                                <p>SP ATK: {p.spAttack} | SP DEF: {p.spDefense}</p>
-                                <p>Purity: {p.purity.toString()}</p>
+                                <p>Lvl {Number(p.level)} | HP {Number(p.hp)} | ATK {Number(p.attack)} | DEF {Number(p.defense)} | SPD {Number(p.speed)}</p>
+                                <p>Gender: {p.gender}</p>
+                                <p>Sp. Attack: {p.spAttack} | Sp. Defense: {p.spDefense}</p>
+                                <p>Purity: {Number(p.purity)}</p>
+                                <p className="mt-2">💰 {p.price} ETH ({p.saleType})</p>
+                                {p.saleType === "Auction" && (
+                                    <p>⏳ Ends in {formatCountdown(Math.floor(p.endTime - Date.now() / 1000))}</p>
+                                )}
+
+                                {p.seller === userAddress && (
+                                    <button
+                                        className="mt-2 bg-red-500 text-white px-2 py-1 rounded"
+                                        onClick={() => cancelListing(p.tokenId)}
+                                    >
+                                        Cancel
+                                    </button>
+                                )}
                             </div>
                         ))}
-                    </div>
-                )}
-            </div>
 
+                    </div>}
+            </section>
 
-            {/* Console Output */}
-            <div className="mt-4 p-4 bg-gray-100">
-                <h2 className="font-bold">Console Log:</h2>
-                <p style={{ whiteSpace: 'pre-wrap' }}>{consoleLog}</p>
-            </div>
+            {/* owned pokémon */}
+            <section className="border p-4 rounded">
+                <h2 className="text-xl font-bold">🧬 My Pokémon</h2>
+                {ownedTokens.length === 0
+                    ? <p>You own none.</p>
+                    : <div className="grid md:grid-cols-3 gap-4 mt-3">
+                        {ownedTokens.map((p, i) => (
+                            <div key={i} className="border rounded shadow p-3">
+                                <h3 className="font-bold">{p.name} #{p.tokenId}</h3>
+                                <p>Type: {p.pokemonType}</p>
+                                <p>Lvl {Number(p.level)} | HP {Number(p.hp)} | ATK {Number(p.attack)} | DEF {Number(p.defense)} | SPD {Number(p.speed)}</p>
+                                <p>Gender: {p.gender}</p>
+                                <p>Sp. Attack: {p.spAttack} | Sp. Defense: {p.spDefense}</p>
+                                <p>Purity: {Number(p.purity)}</p>
+                            </div>
+                        ))}
+                    </div>}
+            </section>
+
         </div>
     );
 }
