@@ -141,3 +141,8 @@ Frontend runs at: `http://localhost:5173`
 - Emergency circuit breaker using OpenZeppelin’s `Pausable`
 - Escrow-based custody of NFTs in the auction contract
 
+---
+
+## 🤝 Teamwork & Collaboration
+
+This project was developed collaboratively during multiple group sessions. We worked synchronously, both in-person and online, ensuring that all components—from smart contracts to frontend integration—were co-designed, reviewed, and tested together in real-time. Every major decision was discussed collectively, and implementation was carried out through active pair programming and shared troubleshooting.
