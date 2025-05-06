@@ -128,8 +128,8 @@ Frontend runs at: `http://localhost:5173`
 |----------|----------------------------------|------------------------------------------------------------|
 | 1        | Run local blockchain             | `npx hardhat node`                                         |
 | 2        | Deploy contracts                 | `npx hardhat run scripts/deploy.js --network localhost`    |
-| 3        | Start backend signature server   | `cd backend && node server.js`                             |
-| 4        | Start frontend app               | `cd frontend && npm install && npm run dev`                |
+| 3        | Start backend signature server   | `cd backend & node server.js`                             |
+| 4        | Start frontend app               | `cd frontend & npm install & npm run dev`                |
 
 ---
 
@@ -143,6 +143,6 @@ Frontend runs at: `http://localhost:5173`
 
 ---
 
-## 🤝 Teamwork & Collaboration
+## Teamwork & Collaboration
 
 This project was developed collaboratively during multiple group sessions. We worked synchronously, both in-person and online, ensuring that all components—from smart contracts to frontend integration—were co-designed, reviewed, and tested together in real-time. Every major decision was discussed collectively, and implementation was carried out through active pair programming and shared troubleshooting.
