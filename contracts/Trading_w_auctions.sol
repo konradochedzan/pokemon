@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import "@openzeppelin/contracts/token/ERC721/utils/ERC721Holder.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
 
 /**
  * @title TradingWithAuctions (escrow version)
@@ -31,6 +32,7 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard, ERC721Holder {
     mapping(address => bool) public isBlacklisted;
     bool public paused;
     uint256 public tradingFee = 0; // basis-points (e.g. 500 = 5 %)
+    address public feeRecipient;
     uint256 public constant MAX_PRICE = 100 ether;
 
     // ─── Enums / Structs ────────────────────────────────────────────────────────
@@ -82,7 +84,10 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard, ERC721Holder {
         address indexed winner,
         uint256 finalPrice
     );
-
+    event FeeRecipientChanged(
+        address indexed oldRecipient,
+        address indexed newRecipient
+    );
     // ─── Modifiers ──────────────────────────────────────────────────────────────
 
     modifier whenNotPaused() {
@@ -92,6 +97,12 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard, ERC721Holder {
     modifier notBlacklisted() {
         require(!isBlacklisted[msg.sender], "Blacklisted");
         _;
+    }
+
+    // -----------------
+    /// @notice initialise feeRecipient to the deployer
+    constructor() {
+        feeRecipient = msg.sender;
     }
 
     // ─── Admin setters ─────────────────────────────────────────────────────────
@@ -111,6 +122,12 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard, ERC721Holder {
 
     function withdraw() external onlyOwner {
         payable(owner()).transfer(address(this).balance);
+    }
+
+    function setFeeRecipient(address newRecipient) external onlyOwner {
+        require(newRecipient != address(0), "Zero recipient");
+        emit FeeRecipientChanged(feeRecipient, newRecipient);
+        feeRecipient = newRecipient;
     }
 
     // ─── Listing (escrow transfer IN) ──────────────────────────────────────────
@@ -163,6 +180,7 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard, ERC721Holder {
     ) external payable whenNotPaused nonReentrant notBlacklisted {
         Listing storage item = listings[nftContract][tokenId];
         require(item.saleType == SaleType.FixedPrice, "Not fixed-price");
+        uint256 price_ = item.price;
         require(item.price > 0, "Not listed");
         require(msg.value == item.price, "Wrong ETH");
 
@@ -170,8 +188,10 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard, ERC721Holder {
 
         uint256 fee = (item.price * tradingFee) / 10000;
         uint256 sellerAmount = item.price - fee;
-        payable(item.seller).transfer(sellerAmount);
-        if (fee > 0) payable(owner()).transfer(fee);
+        //payable(item.seller).transfer(sellerAmount);
+        //if (fee > 0) payable(owner()).transfer(fee);
+        Address.sendValue(payable(item.seller), sellerAmount);
+        if (fee > 0) Address.sendValue(payable(feeRecipient), fee);
 
         IERC721(nftContract).safeTransferFrom(
             address(this),
@@ -179,7 +199,7 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard, ERC721Holder {
             tokenId
         );
 
-        emit Purchase(nftContract, tokenId, msg.sender, item.price);
+        emit Purchase(nftContract, tokenId, msg.sender, price_);
     }
 
     // ─── Cancel (return to seller) ─────────────────────────────────────────────
@@ -240,13 +260,24 @@ contract TradingWithAuctions is Ownable, ReentrancyGuard, ERC721Holder {
 
         if (li.highestBidder != address(0)) {
             // ✅ at least one bid – send NFT to winner & ETH to seller
-            IERC721(nftAddress).transferFrom(
+            //IERC721(nftAddress).transferFrom(
+            //    address(this),
+            //    li.highestBidder,
+            //    tokenId
+            //);
+            //(bool ok, ) = li.seller.call{value: li.highestBid}("");
+            //require(ok, "ETH transfer failed");
+            IERC721(nftAddress).safeTransferFrom(
                 address(this),
                 li.highestBidder,
                 tokenId
             );
-            (bool ok, ) = li.seller.call{value: li.highestBid}("");
-            require(ok, "ETH transfer failed");
+
+            uint256 fee = (li.highestBid * tradingFee) / 10_000;
+            uint256 sellerAmount = li.highestBid - fee;
+
+            Address.sendValue(payable(li.seller), sellerAmount);
+            if (fee > 0) Address.sendValue(payable(feeRecipient), fee);
 
             emit AuctionFinalized(
                 nftAddress,

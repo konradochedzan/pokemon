@@ -177,7 +177,7 @@ export default function CompleteFrontend() {
 
             for (const l of candidates) {
                 try {
-                  
+
                     await tradingContract.callStatic.finalizeAuction(
                         PokemonNFTAddress,
                         l.tokenId
@@ -220,7 +220,7 @@ export default function CompleteFrontend() {
     const connectWallet = async () => {
         if (!window.ethereum) { alert("Install MetaMask"); return; }
 
-        // 1️⃣ blokada wielokrotnego kliknięcia
+        // 1️⃣ Protection against multiple clicking
         if (isConnecting || userAddress) return;
         setIsConnecting(true);
 
@@ -235,10 +235,10 @@ export default function CompleteFrontend() {
                 } catch (e: any) {
 
                     if (e.code === -32002) {
-                        pushLog("🕑 Połączenie MetaMask już czeka – zaakceptuj lub zamknij okno");
+                        pushLog("🕑 MetaMask connection is pending – accept it or close the window.");
                         return;
                     }
-                    throw e; 
+                    throw e;
                 }
             }
 
@@ -363,7 +363,6 @@ export default function CompleteFrontend() {
             pushLog(e.message);
         }
     };
-
 
     /* ─── bid & finalize ──────────────────────────────────────────────── */
     const placeBid = async () => {
