@@ -1,4 +1,6 @@
-# Decentralized Pokémon Trading Platform
+# Decentralized Pokémon Trading Platform - SETUP INSTRUCTIONS
+
+## Konrad Ochedzan (24-741-118) and Monna Dimitrova (24-744-534)
 
 This project implements a fully decentralized application (dApp) for trading Pokémon cards as NFTs using Ethereum smart contracts. It includes:
 
@@ -135,12 +137,19 @@ Frontend runs at: `http://localhost:5173`
 
 ## Security Features Implemented
 
-- Role-based access control via OpenZeppelin's `Ownable`
+- Role-based access control via OpenZeppelin's Ownable
 - Signature-based minting verification via EIP-712
 - Optional commit-reveal scheme to prevent front-running in auctions
-- Emergency circuit breaker using OpenZeppelin’s `Pausable`
+- Emergency circuit breaker using OpenZeppelin’s Pausable
 - Escrow-based custody of NFTs in the auction contract
-
+- Reentrancy protection using OpenZeppelin’s ReentrancyGuard
+- Safe minting practices (_safeMint) to avoid unsafe token transfers
+- Bot and loop prevention on mysteryBoxOpening function to block spam/exploit loops
+- Fund withdrawal protections to ensure secure balance transfers
+- ECDSA signature verification for secure off-chain/on-chain communication
+- Extensive event logging on the blockchain for transparency and off-chain indexing; events include PokemonCardMinted, Listed, Purchase, NewBid, and AuctionFinalized
+- Locking URI metadata so the owner cannot arbitrarily change Pokémon NFT properties
+- Limiting bidding prices to prevent breaking frontend assumptions or UI logic
 ---
 
 ## Teamwork & Collaboration
