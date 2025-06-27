@@ -954,28 +954,28 @@ describe("PokemonNFT and Trading Tests", function () {
 
         // Transfer tokens to users
         // Make sure owner actually owns token 1 before transferring
-        const token1Owner = await pokemonNFT.ownerOf(1);
+        const token1Owner = await pokemonNFT.ownerOf(2);
         if (token1Owner === owner.address) {
-          await pokemonNFT.transferFrom(owner.address, user1.address, 1);
+          await pokemonNFT.transferFrom(owner.address, user1.address, 2);
         } else {
           console.log("Note: Owner doesn't own token 1, skipping transfer");
         }
 
         // Transfer token 2 - this should be fine as it was just minted to owner
-        await pokemonNFT.transferFrom(owner.address, user2.address, 2);
+        await pokemonNFT.transferFrom(owner.address, user2.address, 3);
 
         // Get current owners of tokens to make sure we approve correctly
-        const currentOwner1 = await pokemonNFT.ownerOf(1);
-        const currentOwner2 = await pokemonNFT.ownerOf(2);
+        const currentOwner1 = await pokemonNFT.ownerOf(2);
+        const currentOwner2 = await pokemonNFT.ownerOf(3);
 
         // Approve trading contract with the correct owners
-        await pokemonNFT.connect(await ethers.getSigner(currentOwner1)).approve(await tradingWithAuctions.getAddress(), 1);
-        await pokemonNFT.connect(await ethers.getSigner(currentOwner2)).approve(await tradingWithAuctions.getAddress(), 2);
+        await pokemonNFT.connect(await ethers.getSigner(currentOwner1)).approve(await tradingWithAuctions.getAddress(), 2);
+        await pokemonNFT.connect(await ethers.getSigner(currentOwner2)).approve(await tradingWithAuctions.getAddress(), 3);
 
         // List tokens from correct owners
         await tradingWithAuctions.connect(await ethers.getSigner(currentOwner1)).listItem(
           await pokemonNFT.getAddress(),
-          1,
+          2,
           ethers.parseEther("0.5"),
           0, // FixedPrice
           0
@@ -983,7 +983,7 @@ describe("PokemonNFT and Trading Tests", function () {
 
         await tradingWithAuctions.connect(await ethers.getSigner(currentOwner2)).listItem(
           await pokemonNFT.getAddress(),
-          2,
+          3,
           ethers.parseEther("0.7"),
           0, // FixedPrice
           0
@@ -992,8 +992,8 @@ describe("PokemonNFT and Trading Tests", function () {
         // Check getAllListedTokenIds
         const allListedTokens = await tradingWithAuctions.getAllListedTokenIds(await pokemonNFT.getAddress());
         expect(allListedTokens.length).to.equal(2);
-        expect(allListedTokens.includes(BigInt(1))).to.be.true;
         expect(allListedTokens.includes(BigInt(2))).to.be.true;
+        expect(allListedTokens.includes(BigInt(3))).to.be.true;
       });
     });
 
